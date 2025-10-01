@@ -1,0 +1,14 @@
+{
+  "name": "net.32ba.blendshare-ndmf-extension",
+  "displayName": "BlendShare NDMF Extension",
+  "version": "0.0.1",
+  "unity": "2022.3",
+  "description": "Integrates BlendShare blendshape assets into the NDMF build pipeline for non-destructive avatar workflows.",
+  "author": {
+    "name": "32ba"
+  },
+  "dependencies": {
+    "nadena.dev.ndmf": "1.9.4",
+    "com.triturbo.blendshare": "0.0.11"
+  }
+}

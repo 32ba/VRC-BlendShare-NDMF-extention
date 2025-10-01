@@ -1,0 +1,165 @@
+using System.Collections.Generic;
+using System.Linq;
+using nadena.dev.ndmf;
+using Net._32ba.BlendShareNdmfExtension;
+using Triturbo.BlendShapeShare.BlendShapeData;
+using UnityEngine;
+
+[assembly: ExportsPlugin(typeof(Net._32ba.BlendShareNdmfExtension.Editor.AddBlendShapeByBlendSharePlugin))]
+
+namespace Net._32ba.BlendShareNdmfExtension.Editor
+{
+  internal sealed class AddBlendShapeByBlendSharePlugin : Plugin<AddBlendShapeByBlendSharePlugin>
+  {
+    public override string DisplayName => "BlendShare BlendShape Bridge";
+    public override string QualifiedName => "net.32ba.blendshare-ndmf-extension";
+
+    protected override void Configure()
+    {
+      InPhase(BuildPhase.Optimizing)
+        .Run("BlendShare: Append BlendShapes", ApplyBlendShapes);
+    }
+
+    private static void ApplyBlendShapes(BuildContext context)
+    {
+      var mappings = context.AvatarRootObject.GetComponentsInChildren<BlendShareRendererMapping>(true);
+      if (mappings == null || mappings.Length == 0) return;
+
+      var appliedRenderers = new HashSet<SkinnedMeshRenderer>();
+
+      foreach (var mapping in mappings)
+      {
+        if (mapping == null)
+        {
+          continue;
+        }
+
+        if (!mapping.IsValid)
+        {
+          LogWarning($"Skip invalid mapping on '{mapping.gameObject.name}'");
+          continue;
+        }
+
+        var renderer = mapping.TargetRenderer;
+        if (renderer == null)
+        {
+          LogWarning($"Renderer reference missing on '{mapping.gameObject.name}'");
+          continue;
+        }
+
+        if (!appliedRenderers.Add(renderer))
+        {
+          LogWarning($"Renderer '{renderer.name}' already processed; skipping duplicate mapping");
+          continue;
+        }
+
+        ProcessMapping(context, renderer, mapping);
+      }
+    }
+
+    private static void ProcessMapping(BuildContext context, SkinnedMeshRenderer renderer, BlendShareRendererMapping mapping)
+    {
+      var sourceMesh = renderer.sharedMesh;
+      if (sourceMesh == null)
+      {
+        LogWarning($"Renderer '{renderer.name}' has no shared mesh; skipping");
+        return;
+      }
+
+      var data = mapping.BlendShapeDataAsset as BlendShapeDataSO;
+      if (data == null)
+      {
+        LogWarning($"BlendShare asset reference on '{renderer.name}' is missing or incompatible; skipping");
+        return;
+      }
+
+      var meshName = mapping.EffectiveMeshName;
+      var meshData = data.m_MeshDataList?.FirstOrDefault(m => string.Equals(m.m_MeshName, meshName, System.StringComparison.Ordinal));
+      if (meshData == null)
+      {
+        LogWarning($"BlendShare asset '{data.name}' has no mesh entry for '{meshName}'; skipping");
+        return;
+      }
+
+      var conflicts = FindConflictingBlendShapes(sourceMesh, meshData);
+      if (conflicts.Count > 0 && mapping.DuplicatePolicy == BlendShareRendererMapping.DuplicateBlendShapePolicy.Skip)
+      {
+        LogWarning($"Conflicting blendshape names on '{renderer.name}' skipped: {string.Join(", ", conflicts)}");
+        return;
+      }
+
+      if (mapping.EnforceVertexHash)
+      {
+        if (meshData.m_VertexCount != sourceMesh.vertexCount || meshData.m_VerticesHash != MeshData.GetVerticesHash(sourceMesh))
+        {
+          LogError($"Vertex count/hash mismatch between '{renderer.name}' and BlendShare asset '{data.name}'");
+          return;
+        }
+      }
+
+      var newMesh = BlendShapeAppender.CreateBlendShapesMesh(meshData, sourceMesh);
+      if (newMesh == null)
+      {
+        LogError($"BlendShare failed to create mesh '{meshName}' for renderer '{renderer.name}'");
+        return;
+      }
+
+      newMesh.name = string.IsNullOrEmpty(sourceMesh.name) ? "BlendShareMesh" : sourceMesh.name + "_BlendShare";
+
+      var previousWeights = CaptureWeights(renderer);
+      renderer.sharedMesh = newMesh;
+      RestoreWeights(renderer, previousWeights);
+
+      Debug.Log($"[BlendShare] Appended {meshData.m_ShapeNames?.Count ?? 0} blendshapes to '{renderer.name}'");
+    }
+
+    private static List<string> FindConflictingBlendShapes(Mesh mesh, MeshData meshData)
+    {
+      var conflicts = new List<string>();
+      if (mesh == null || meshData?.m_ShapeNames == null) return conflicts;
+
+      var existingNames = new HashSet<string>(mesh.blendShapeCount);
+      for (var i = 0; i < mesh.blendShapeCount; i++)
+      {
+        existingNames.Add(mesh.GetBlendShapeName(i));
+      }
+
+      foreach (var name in meshData.m_ShapeNames)
+      {
+        if (existingNames.Contains(name)) conflicts.Add(name);
+      }
+
+      return conflicts;
+    }
+
+    private static Dictionary<string, float> CaptureWeights(SkinnedMeshRenderer renderer)
+    {
+      var result = new Dictionary<string, float>(renderer.sharedMesh ? renderer.sharedMesh.blendShapeCount : 0);
+      var mesh = renderer.sharedMesh;
+      if (mesh == null) return result;
+      for (var i = 0; i < mesh.blendShapeCount; i++)
+      {
+        result[mesh.GetBlendShapeName(i)] = renderer.GetBlendShapeWeight(i);
+      }
+      return result;
+    }
+
+    private static void RestoreWeights(SkinnedMeshRenderer renderer, Dictionary<string, float> weights)
+    {
+      var mesh = renderer.sharedMesh;
+      if (mesh == null) return;
+      foreach (var pair in weights)
+      {
+        var index = mesh.GetBlendShapeIndex(pair.Key);
+        if (index >= 0)
+        {
+          renderer.SetBlendShapeWeight(index, pair.Value);
+        }
+      }
+    }
+
+    private static void LogWarning(string message) => Debug.LogWarning($"[BlendShare] {message}");
+    private static void LogError(string message) => Debug.LogError($"[BlendShare] {message}");
+  }
+}
+
