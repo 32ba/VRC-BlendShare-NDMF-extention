@@ -1,4 +1,7 @@
+using System;
+using System.Collections.Generic;
 using UnityEngine;
+using UnityEngine.Animations;
 
 namespace Net._32ba.BlendShareNdmfExtension
 {
@@ -18,26 +21,20 @@ namespace Net._32ba.BlendShareNdmfExtension
     [SerializeField]
     private DuplicateBlendShapePolicy _duplicateBlendShapePolicy = DuplicateBlendShapePolicy.Overwrite;
 
+    [SerializeReference, NotKeyable]
+    private List<BlendShareBlendShapeDefinition> _definitions = new();
+
     private SkinnedMeshRenderer _cachedRenderer;
 
     public ScriptableObject BlendShapeDataAsset => _blendShapeData;
     public string MeshNameOverride => _meshNameOverride;
     public bool EnforceVertexHash => _enforceVertexHash;
     public DuplicateBlendShapePolicy DuplicatePolicy => _duplicateBlendShapePolicy;
+    public IReadOnlyList<BlendShareBlendShapeDefinition> BlendShapeDefinitions => _definitions;
     public SkinnedMeshRenderer TargetRenderer => _cachedRenderer != null ? _cachedRenderer : (_cachedRenderer = GetComponent<SkinnedMeshRenderer>());
 
-    public bool IsValid
-    {
-      get
-      {
-        if (TargetRenderer == null)
-        {
-          return false;
-        }
-
-        return _blendShapeData != null;
-      }
-    }
+    public bool IsValid => TargetRenderer != null && BlendShapeDataAsset != null;
+    public bool HasBlendShapeDefinitions => _definitions != null && _definitions.Count > 0;
 
     public string EffectiveMeshName
     {
@@ -64,6 +61,48 @@ namespace Net._32ba.BlendShareNdmfExtension
       _meshNameOverride = meshNameOverride ?? string.Empty;
       _enforceVertexHash = enforceHash;
       _duplicateBlendShapePolicy = duplicatePolicy;
+    }
+
+    public bool TryGetDefinition(string shapeName, out BlendShareBlendShapeDefinition definition)
+    {
+      definition = null;
+      if (string.IsNullOrEmpty(shapeName) || _definitions == null) return false;
+
+      for (var i = 0; i < _definitions.Count; i++)
+      {
+        var candidate = _definitions[i];
+        if (candidate != null && string.Equals(candidate.ShapeName, shapeName, StringComparison.Ordinal))
+        {
+          definition = candidate;
+          return true;
+        }
+      }
+
+      return false;
+    }
+
+    public void ApplyDefinitionWeights(SkinnedMeshRenderer renderer)
+    {
+      if (renderer == null || renderer.sharedMesh == null || _definitions == null) return;
+
+      foreach (var definition in _definitions)
+      {
+        if (definition == null || !definition.HasValidShape) continue;
+
+        var index = renderer.sharedMesh.GetBlendShapeIndex(definition.ShapeName);
+        if (index >= 0)
+        {
+          renderer.SetBlendShapeWeight(index, definition.Weight);
+        }
+      }
+    }
+
+    private void OnValidate()
+    {
+      if (_definitions == null)
+      {
+        _definitions = new List<BlendShareBlendShapeDefinition>();
+      }
     }
 
     public enum DuplicateBlendShapePolicy
