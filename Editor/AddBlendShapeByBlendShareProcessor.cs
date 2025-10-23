@@ -88,16 +88,19 @@ namespace Net._32ba.BlendShareNdmfExtension.Editor
         return;
       }
 
-      if (mapping.EnforceVertexHash)
+      if (meshData.m_VertexCount != sourceMesh.vertexCount)
       {
-        if (meshData.m_VertexCount != sourceMesh.vertexCount || meshData.m_VerticesHash != MeshData.GetVerticesHash(sourceMesh))
-        {
-          LogError($"Vertex count/hash mismatch between '{renderer.name}' and BlendShare asset '{data.name}'");
-          return;
-        }
+        LogError($"Vertex count mismatch between '{renderer.name}' and BlendShare asset '{data.name}'");
+        return;
       }
 
-      var newMesh = BlendShapeAppender.CreateBlendShapesMesh(meshData, sourceMesh);
+      if (mapping.EnforceVertexHash && meshData.m_VerticesHash != MeshData.GetVerticesHash(sourceMesh))
+      {
+        LogError($"Vertex hash mismatch between '{renderer.name}' and BlendShare asset '{data.name}'");
+        return;
+      }
+
+      var newMesh = CreateMeshWithBlendShapes(sourceMesh, meshData, mapping.DuplicatePolicy, mapping.EnforceVertexHash);
       if (newMesh == null)
       {
         LogError($"BlendShare failed to create mesh '{meshName}' for renderer '{renderer.name}'");
@@ -158,8 +161,78 @@ namespace Net._32ba.BlendShareNdmfExtension.Editor
       }
     }
 
+    private static Mesh CreateMeshWithBlendShapes(Mesh sourceMesh, MeshData meshData, BlendShareRendererMapping.DuplicateBlendShapePolicy duplicatePolicy, bool enforceVertexHash)
+    {
+      if (sourceMesh == null || meshData == null)
+      {
+        return null;
+      }
+
+      if (meshData.m_VertexCount != sourceMesh.vertexCount)
+      {
+        return null;
+      }
+
+      if (enforceVertexHash && meshData.m_VerticesHash != MeshData.GetVerticesHash(sourceMesh))
+      {
+        return null;
+      }
+
+      var newMesh = UnityEngine.Object.Instantiate(sourceMesh);
+
+      if (duplicatePolicy == BlendShareRendererMapping.DuplicateBlendShapePolicy.Overwrite)
+      {
+        var preserved = new List<(string name, UnityBlendShapeData data)>(newMesh.blendShapeCount);
+        var hadOverlap = false;
+
+        for (var i = 0; i < newMesh.blendShapeCount; i++)
+        {
+          var shapeName = newMesh.GetBlendShapeName(i);
+          if (meshData.ContainsBlendShape(shapeName))
+          {
+            hadOverlap = true;
+            var replacement = meshData.GetBlendShape(shapeName)?.m_UnityBlendShapeData;
+            if (replacement == null)
+            {
+              replacement = new UnityBlendShapeData(newMesh, i);
+            }
+            preserved.Add((shapeName, replacement));
+          }
+          else
+          {
+            preserved.Add((shapeName, new UnityBlendShapeData(newMesh, i)));
+          }
+        }
+
+        if (hadOverlap)
+        {
+          newMesh.ClearBlendShapes();
+          foreach (var (shapeName, data) in preserved)
+          {
+            if (data?.m_Frames == null) continue;
+            foreach (var frame in data.m_Frames)
+            {
+              frame.AddBlendShapeFrame(ref newMesh, shapeName);
+            }
+          }
+        }
+      }
+
+      foreach (var blendShape in meshData.BlendShapes)
+      {
+        if (newMesh.GetBlendShapeIndex(blendShape.m_ShapeName) >= 0) continue;
+        var blendData = blendShape.m_UnityBlendShapeData;
+        if (blendData?.m_Frames == null) continue;
+        foreach (var frame in blendData.m_Frames)
+        {
+          frame.AddBlendShapeFrame(ref newMesh, blendShape.m_ShapeName);
+        }
+      }
+
+      return newMesh;
+    }
+
     private static void LogWarning(string message) => Debug.LogWarning($"[BlendShare] {message}");
     private static void LogError(string message) => Debug.LogError($"[BlendShare] {message}");
   }
 }
-
